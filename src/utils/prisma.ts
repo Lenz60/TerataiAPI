@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { toNumber } from "@whiskeysockets/baileys";
+import { toNumber } from "baileys";
 import Long from "long";
-import type { MakeTransformedPrisma, MakeSerializedPrisma } from "./types";
+import type { MakeTransformedPrisma, MakeSerializedPrisma } from "@/types/prisma";
 
 /** Transform object props value into Prisma-supported types */
 export function transformPrisma<T extends Record<string, any>>(
@@ -15,6 +15,8 @@ export function transformPrisma<T extends Record<string, any>>(
 			obj[key] = Buffer.from(val);
 		} else if (typeof val === "number" || val instanceof Long) {
 			obj[key] = toNumber(val);
+		} else if (typeof val === "bigint") {
+			obj[key] = Number(val);
 		} else if (removeNullable && (typeof val === "undefined" || val === null)) {
 			delete obj[key];
 		}
@@ -33,7 +35,7 @@ export function serializePrisma<T extends Record<string, any>>(
 	for (const [key, val] of Object.entries(obj)) {
 		if (val instanceof Buffer) {
 			obj[key] = val.toJSON();
-		} else if (typeof val === "bigint" || val instanceof BigInt) {
+		} else if (typeof val === "bigint") {
 			obj[key] = val.toString();
 		} else if (removeNullable && (typeof val === "undefined" || val === null)) {
 			delete obj[key];

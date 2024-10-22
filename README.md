@@ -8,18 +8,17 @@ Project continued from [@ookamiiixd/baileys-api](https://github.com/ookamiiixd/b
 
 ## Requirements
 
-- NodeJS version 18.19.0 or higher
-- Prisma [supported databases](https://www.prisma.io/docs/reference/database-reference/supported-databases). Tested on MySQL and PostgreSQL
+-   NodeJS version 18.19.0 or higher (Recommended version 20 and above)
+-   Prisma [supported databases](https://www.prisma.io/docs/reference/database-reference/supported-databases). Tested on MySQL and PostgreSQL
 
 ## Installation
 
-1. Download or clone this repo. If you want to skip the build step, you can download the release (file with the `baileys-api.tgz` name pattern) from the release page
+1. Download [latest release](https://github.com/nizarfadlan/baileys-api/releases/latest). If you want to skip the build step, you can download the release (file with the `baileys-api.tgz` name pattern) from the release page
 2. Enter to the project directory
 3. Install the dependencies
 
 ```sh
 npm install
-npm run postinstall
 ```
 
 4. Build the project using the `build` script
@@ -33,8 +32,8 @@ You can skip this part if you're using the prebuilt one from the release page
 ## Setup
 
 1. Copy the `.env.example` file and rename it into `.env`, then update your [connection url](https://www.prisma.io/docs/reference/database-reference/connection-urls) in the `DATABASE_URL` field
-1. Update your [provider](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference#fields) in the `prisma/schema.prisma` file if you're using database other than MySQL
-1. Run your [migration](https://www.prisma.io/docs/reference/api-reference/command-reference#prisma-migrate)
+2. Update your [provider](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference#fields) in the `prisma/schema.prisma` file if you're using database other than MySQL
+3. Run your [migration](https://www.prisma.io/docs/reference/api-reference/command-reference#prisma-migrate)
 
 ```sh
 npx prisma migrate (dev|deploy)
@@ -51,23 +50,29 @@ Don't forget to always re-run those whenever there's a change on the `prisma/sch
 ## `.env` Configurations
 
 ```env
-# Listening Host
-HOST="localhost"
-
-# Listening Port
+# Listening Port HTTP and Socket.io
 PORT="3000"
-
-# API Key (for Authorization Header)
-API_KEY="" # Leave it empty if you don't want
-
-# Name browser bot
-NAME_BOT_BROWSER="Whatsapp Bot"
 
 # Project Mode (development|production)
 NODE_ENV="development"
 
+# Global URL Webhook
+URL_WEBHOOK="http://localhost:3000/webhook"
+
+# Enable Webhook
+ENABLE_WEBHOOK="true"
+
+# Enable websocket
+ENABLE_WEBSOCKET="true"
+
+# Name browser bot
+BOT_NAME="Whatsapp Bot"
+
 # Database Connection URL
-DATABASE_URL="mysql://root:12345@localhost:3306/baileys_api"
+DATABASE_URL="mysql://root:@localhost:3306/baileys_api"
+
+# Pino Logger Level
+LOG_LEVEL="debug"
 
 # Reconnect Interval (in Milliseconds)
 RECONNECT_INTERVAL="5000"
@@ -78,8 +83,11 @@ MAX_RECONNECT_RETRIES="5"
 # Maximum SSE QR Generation Attempts
 SSE_MAX_QR_GENERATION="10"
 
-# Pino Logger Level
-LOG_LEVEL="warn"
+# Name session config
+SESSION_CONFIG_ID="session-config"
+
+# API Key (for Authorization Header and Socket.io Token)
+API_KEY="a6bc226axxxxxxxxxxxxxx"
 ```
 
 ## Usage
@@ -105,13 +113,7 @@ The API Documentation can fork **Postman Collection** in your workspace Postman
 
 ## Notes
 
-- I only provide a simple authentication method, please modify according to your own needs.
-
-## TODO
-
-- [ ] Move ExpressJS to HonoJS
-- [ ] Add endpoint for connecting native mobile API
-- [ ] Add endpoint for Groups (such as create, change information groups, etc)
+-   I only provide a simple authentication method, please modify according to your own needs.
 
 ## Notice
 

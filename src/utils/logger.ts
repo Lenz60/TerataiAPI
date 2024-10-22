@@ -1,3 +1,4 @@
+import env from "@/config/env";
 import pino, { type Logger } from "pino";
 
 export const logger: Logger = pino({
@@ -5,12 +6,12 @@ export const logger: Logger = pino({
 	transport: {
 		targets: [
 			{
-				level: process.env.LOG_LEVEL || "debug",
+				level: env.LOG_LEVEL || "debug",
 				target: "pino-pretty",
 				options: {
 					colorize: true,
 				},
-			}
+			},
 		],
 	},
 	mixin(mergeObject, level) {

@@ -1,20 +1,15 @@
-import type {
-	BaileysEventEmitter,
-	MessageUserReceipt,
-	proto,
-	WAMessageKey,
-} from "@whiskeysockets/baileys";
-import { jidNormalizedUser, toNumber } from "@whiskeysockets/baileys";
-import type { BaileysEventHandler, MakeTransformedPrisma } from "@/store/types";
-import { transformPrisma } from "@/store/utils";
-import { prisma } from "@/db";
-import { logger } from "@/shared";
+import type { BaileysEventEmitter, MessageUserReceipt, proto, WAMessageKey } from "baileys";
+import { jidNormalizedUser, toNumber } from "baileys";
+import type { BaileysEventHandler, MakeTransformedPrisma } from "@/types";
+import { transformPrisma, logger, emitEvent } from "@/utils";
+import { prisma } from "@/config/database";
 import type { Message } from "@prisma/client";
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
 	(key?.fromMe ? "me" : key?.participant || key?.remoteJid) || "";
 
 export default function messageHandler(sessionId: string, event: BaileysEventEmitter) {
+	const model = prisma.message;
 	let listening = false;
 
 	const set: BaileysEventHandler<"messaging-history.set"> = async ({ messages, isLatest }) => {
@@ -22,18 +17,27 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 			await prisma.$transaction(async (tx) => {
 				if (isLatest) await tx.message.deleteMany({ where: { sessionId } });
 
+				const processedMessages = messages.map((message) => ({
+					...(transformPrisma(message) as MakeTransformedPrisma<Message>),
+					remoteJid: message.key.remoteJid!,
+					id: message.key.id!,
+					sessionId,
+				}));
 				await tx.message.createMany({
-					data: messages.map((message) => ({
-						...transformPrisma(message) as MakeTransformedPrisma<Message>,
-						remoteJid: message.key.remoteJid!,
-						id: message.key.id!,
-						sessionId
-					})),
+					data: processedMessages,
 				});
+				emitEvent("messages.upsert", sessionId, { messages: processedMessages });
 			});
 			logger.info({ messages: messages.length }, "Synced messages");
 		} catch (e) {
 			logger.error(e, "An error occured during messages set");
+			emitEvent(
+				"messages.upsert",
+				sessionId,
+				undefined,
+				"error",
+				`An error occured during messages set: ${e.message}`,
+			);
 		}
 	};
 
@@ -45,19 +49,28 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 					try {
 						const jid = jidNormalizedUser(message.key.remoteJid!);
 						const data = transformPrisma(message) as MakeTransformedPrisma<Message>;
-						await prisma.message.upsert({
+
+						await model.upsert({
 							select: { pkId: true },
 							create: {
 								...data,
 								remoteJid: jid,
 								id: message.key.id!,
-								sessionId
+								sessionId,
 							},
 							update: { ...data },
-							where: { sessionId_remoteJid_id: { remoteJid: jid, id: message.key.id!, sessionId } }
+							where: {
+								sessionId_remoteJid_id: {
+									remoteJid: jid,
+									id: message.key.id!,
+									sessionId,
+								},
+							},
 						});
+						emitEvent("messages.upsert", sessionId, { messages: data });
 
-						const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
+						const chatExists =
+							(await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
 						if (type === "notify" && !chatExists) {
 							event.emit("chats.upsert", [
 								{
@@ -69,6 +82,13 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 						}
 					} catch (e) {
 						logger.error(e, "An error occured during message upsert");
+						emitEvent(
+							"messages.upsert",
+							sessionId,
+							undefined,
+							"error",
+							`An error occured during message upsert: ${e.message}`,
+						);
 					}
 				}
 				break;
@@ -97,18 +117,28 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 							},
 						},
 					});
+
+					const processedMessage = {
+						...(transformPrisma(data) as MakeTransformedPrisma<Message>),
+						id: data.key.id!,
+						remoteJid: data.key.remoteJid!,
+						sessionId,
+					};
 					await tx.message.create({
 						select: { pkId: true },
-						data: {
-							...transformPrisma(data) as MakeTransformedPrisma<Message>,
-							id: data.key.id!,
-							remoteJid: data.key.remoteJid!,
-							sessionId,
-						},
+						data: processedMessage,
 					});
+					emitEvent("messages.update", sessionId, { messages: processedMessage });
 				});
 			} catch (e) {
 				logger.error(e, "An error occured during message update");
+				emitEvent(
+					"messages.update",
+					sessionId,
+					undefined,
+					"error",
+					`An error occured during message update: ${e.message}`,
+				);
 			}
 		}
 	};
@@ -117,6 +147,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 		try {
 			if ("all" in item) {
 				await prisma.message.deleteMany({ where: { remoteJid: item.jid, sessionId } });
+				emitEvent("messages.delete", sessionId, { message: item });
 				return;
 			}
 
@@ -124,8 +155,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 			await prisma.message.deleteMany({
 				where: { id: { in: item.keys.map((k) => k.id!) }, remoteJid: jid, sessionId },
 			});
+			emitEvent("messages.delete", sessionId, { message: item });
 		} catch (e) {
 			logger.error(e, "An error occured during message delete");
+			emitEvent(
+				"messages.delete",
+				sessionId,
+				undefined,
+				"error",
+				`An error occured during message delete: ${e.message}`,
+			);
 		}
 	};
 
@@ -138,14 +177,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 						where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
 					});
 					if (!message) {
-						return logger.debug({ update }, "Got receipt update for non existent message");
+						return logger.debug(
+							{ update },
+							"Got receipt update for non existent message",
+						);
 					}
 
-					let userReceipt = (message.userReceipt || []) as unknown as MessageUserReceipt[];
+					let userReceipt = (message.userReceipt ||
+						[]) as unknown as MessageUserReceipt[];
 					const recepient = userReceipt.find((m) => m.userJid === receipt.userJid);
 
 					if (recepient) {
-						userReceipt = [...userReceipt.filter((m) => m.userJid !== receipt.userJid), receipt];
+						userReceipt = [
+							...userReceipt.filter((m) => m.userJid !== receipt.userJid),
+							receipt,
+						];
 					} else {
 						userReceipt.push(receipt);
 					}
@@ -154,12 +200,24 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 						select: { pkId: true },
 						data: transformPrisma({ userReceipt: userReceipt }),
 						where: {
-							sessionId_remoteJid_id: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
+							sessionId_remoteJid_id: {
+								id: key.id!,
+								remoteJid: key.remoteJid!,
+								sessionId,
+							},
 						},
 					});
+					emitEvent("message-receipt.update", sessionId, { message: { key, receipt } });
 				});
 			} catch (e) {
 				logger.error(e, "An error occured during message receipt update");
+				emitEvent(
+					"message-receipt.update",
+					sessionId,
+					undefined,
+					"error",
+					`An error occured during message receipt update: ${e.message}`,
+				);
 			}
 		}
 	};
@@ -173,7 +231,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 						where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
 					});
 					if (!message) {
-						return logger.debug({ update }, "Got reaction update for non existent message");
+						return logger.debug(
+							{ update },
+							"Got reaction update for non existent message",
+						);
 					}
 
 					const authorID = getKeyAuthor(reaction.key);
@@ -186,12 +247,24 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 						select: { pkId: true },
 						data: transformPrisma({ reactions: reactions }),
 						where: {
-							sessionId_remoteJid_id: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
+							sessionId_remoteJid_id: {
+								id: key.id!,
+								remoteJid: key.remoteJid!,
+								sessionId,
+							},
 						},
 					});
+					emitEvent("messages.reaction", sessionId, { message: { key, reaction } });
 				});
 			} catch (e) {
 				logger.error(e, "An error occured during message reaction update");
+				emitEvent(
+					"messages.reaction",
+					sessionId,
+					undefined,
+					"error",
+					`An error occured during message reaction update: ${e.message}`,
+				);
 			}
 		}
 	};

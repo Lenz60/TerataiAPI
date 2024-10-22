@@ -1,22 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { BaileysEventMap } from "@whiskeysockets/baileys";
 import type Long from "long";
-
-export type BaileysEventHandler<T extends keyof BaileysEventMap> = (
-	args: BaileysEventMap[T],
-) => void;
 
 type TransformPrisma<T, TransformObject> = T extends Long
 	? number
 	: T extends Uint8Array
 		? Buffer
-		: T extends null
-			? never
-			: T extends object
-				? TransformObject extends true
-					? object
-					: T
-				: T;
+		: T extends bigint
+			? number
+			: T extends null
+				? never
+				: T extends object
+					? TransformObject extends true
+						? object
+						: T
+					: T;
 
 /** Transform unsupported types into supported Prisma types */
 export type MakeTransformedPrisma<

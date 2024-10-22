@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { BaileysEventEmitter } from "@whiskeysockets/baileys";
-import type { BaileysEventHandler } from "@/store/types";
-import { transformPrisma } from "@/store/utils";
-import { prisma } from "@/db";
-import { logger } from "@/shared";
+import type { BaileysEventEmitter, GroupMetadata } from "baileys";
+import type { BaileysEventHandler, MakeTransformedPrisma } from "@/types";
+import { transformPrisma, logger, emitEvent } from "@/utils";
+import { prisma } from "@/config/database";
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 
 export default function groupMetadataHandler(sessionId: string, event: BaileysEventEmitter) {
@@ -11,39 +10,55 @@ export default function groupMetadataHandler(sessionId: string, event: BaileysEv
 	let listening = false;
 
 	const upsert: BaileysEventHandler<"groups.upsert"> = async (groups) => {
-		const promises: Promise<any>[] = [];
-
-		for (const group of groups) {
-			const data = transformPrisma(group);
-			promises.push(
-				model.upsert({
-					select: { pkId: true },
-					create: { ...data, sessionId },
-					update: data,
-					where: { sessionId_id: { id: group.id, sessionId } },
-				}),
-			);
-		}
-
 		try {
-			await Promise.all(promises);
+			const results: MakeTransformedPrisma<GroupMetadata>[] = [];
+			await Promise.any(
+				groups
+					.map((g) => transformPrisma(g))
+					.map((data) => {
+						model.upsert({
+							select: { pkId: true },
+							create: { ...data, sessionId },
+							update: data,
+							where: { sessionId_id: { id: data.id, sessionId } },
+						});
+						results.push(data);
+					}),
+			);
+			emitEvent("groups.upsert", sessionId, { groups: results });
 		} catch (e) {
 			logger.error(e, "An error occured during groups upsert");
+			emitEvent(
+				"groups.upsert",
+				sessionId,
+				undefined,
+				"error",
+				`An error occured during groups upsert: ${e.message}`,
+			);
 		}
 	};
 
 	const update: BaileysEventHandler<"groups.update"> = async (updates) => {
 		for (const update of updates) {
 			try {
+				const data = transformPrisma(update);
 				await model.update({
 					select: { pkId: true },
-					data: transformPrisma(update),
+					data: data,
 					where: { sessionId_id: { id: update.id!, sessionId } },
 				});
+				emitEvent("groups.update", sessionId, { groups: data });
 			} catch (e) {
 				if (e instanceof PrismaClientKnownRequestError && e.code === "P2025")
 					return logger.info({ update }, "Got metadata update for non existent group");
 				logger.error(e, "An error occured during group metadata update");
+				emitEvent(
+					"groups.update",
+					sessionId,
+					undefined,
+					"error",
+					`An error occured during group metadata update: ${e.message}`,
+				);
 			}
 		}
 	};
@@ -66,32 +81,57 @@ export default function groupMetadataHandler(sessionId: string, event: BaileysEv
 				);
 			}
 
+			if (!metadata.participants) {
+				metadata.participants = [];
+			}
+
 			switch (action) {
 				case "add":
 					metadata.participants.push(
-						participants.map((id) => ({ id, isAdmin: false, isSuperAdmin: false })),
+						...participants.map((id) => ({
+							id,
+							admin: null,
+							isAdmin: false,
+							isSuperAdmin: false,
+						})),
 					);
 					break;
 				case "demote":
 				case "promote":
 					for (const participant of metadata.participants) {
 						if (participants.includes(participant.id)) {
+							participant.admin = action === "promote" ? "admin" : null;
 							participant.isAdmin = action === "promote";
 						}
 					}
 					break;
 				case "remove":
-					metadata.participants = metadata.participants.filter((p) => !participants.includes(p.id));
+					metadata.participants = metadata.participants?.filter(
+						(p) => !participants.includes(p.id),
+					);
 					break;
 			}
 
+			const processedParticipants = transformPrisma({ participants: metadata.participants });
 			await model.update({
 				select: { pkId: true },
-				data: transformPrisma({ participants: metadata.participants }),
+				data: processedParticipants,
 				where: { sessionId_id: { id, sessionId } },
+			});
+			emitEvent("group-participants.update", sessionId, {
+				groupId: id,
+				action,
+				participants,
 			});
 		} catch (e) {
 			logger.error(e, "An error occured during group participants update");
+			emitEvent(
+				"group-participants.update",
+				sessionId,
+				undefined,
+				"error",
+				`An error occured during group participants update: ${e.message}`,
+			);
 		}
 	};
 
